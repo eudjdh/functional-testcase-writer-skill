@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/functional-testcase-writer/testcase-metadata.schema.json",
+  "title": "Functional Testcase Metadata Block",
+  "description": "功能测试用例文档头部元信息字段定义（由文档开头的引用块解析得到）。",
+  "type": "object",
+  "required": [
+    "功能点编号",
+    "功能点名称",
+    "所属模块",
+    "关联需求",
+    "测试范围概要",
+    "文档版本号",
+    "测试环境说明"
+  ],
+  "properties": {
+    "功能点编号": {
+      "type": "string",
+      "pattern": "^FEAT-[A-Z][A-Z0-9]*-[0-9]{3,}$"
+    },
+    "功能点名称": { "type": "string", "minLength": 1 },
+    "所属模块": { "type": "string", "minLength": 1 },
+    "关联需求": { "type": "string" },
+    "测试范围概要": { "type": "string", "minLength": 1 },
+    "文档版本号": { "type": "string", "pattern": "^V[0-9]+(\\.[0-9]+)*$" },
+    "编写人": { "type": "string" },
+    "审核人": { "type": "string" },
+    "审批人": { "type": "string" },
+    "测试环境说明": { "type": "string" }
+  },
+  "additionalProperties": true
+}
