@@ -30,8 +30,10 @@
 ├── SKILL.md
 ├── references/              # 编写规则（风格 / 编号 / 覆盖 / INDEX / 衔接）
 ├── templates/               # 功能用例、INDEX、INDEX 行模板
-├── schemas/                 # 头部元信息字段定义
-└── scripts/                 # 文档 lint 工具
+├── schemas/                 # 头部元信息字段定义（lint 的校验依据）
+├── scripts/                 # 文档 lint 工具
+├── examples/                # 完整示例：功能用例文件 + INDEX
+└── LICENSE
 ```
 
 ## 安装到 Agent Skills
@@ -42,6 +44,14 @@
 .opencode/skills/functional-testcase-writer/
 ~/.config/opencode/skills/functional-testcase-writer/
 ~/.agents/skills/functional-testcase-writer/
+```
+
+> 注意：Skill 的目录名必须与 `SKILL.md` 中的 `name`（`functional-testcase-writer`）
+> 一致。直接 clone 本仓库时目录名为 `functional-testcase-writer-skill`，请重命名后再安装：
+
+```bash
+git clone https://github.com/eudjdh/functional-testcase-writer-skill.git \
+  .opencode/skills/functional-testcase-writer
 ```
 
 安装或更新后需要重启 Agent 客户端，使配置期加载的 Skill 生效。
@@ -65,18 +75,44 @@ node scripts/lint-functional-testcases.mjs path/to/testcase-repo
 
 检查项：
 
+- 头部元信息是否缺少必填字段；`功能点编号`（`FEAT-...`）与 `文档版本号`
+  （`V1` / `V1.0` / `V1.0.1` 等）格式是否正确（依据 `schemas/testcase-metadata.schema.json`）。
 - 是否误建 `接口测试` 章节。
-- 功能用例是否缺少必填字段。
+- 功能用例是否缺少必填字段、`用例类型` / `优先级` 是否合法、`用例编号`
+  是否符合 `TC-[模块缩写]-[NNN]` 格式。
 - `状态=待执行` 时 `实际结果` 是否被填充。
 - 安全 / 性能章节是否被误编号。
-- `TC` 编号是否重复（含跨文件重复）。
-- 功能用例是否出现禁用词（接口 / 数据库 / 后端 / API 等）。
+- 功能用例编号是否重复（含跨文件重复）以及同一模块内是否连续、是否从 `001` 起始
+  （缺号 / 未从 001 起始给出警告）。
+- 功能用例是否出现禁用词（如 `返回码` / `数据库` / `后端` / `服务端` / `日志` / `HTTP` 等
+  实现细节词；裸词 `接口` / `API` 因存在合理例外，不纳入自动校验）。
 - 是否缺少 `测试记录` / `问题跟踪` 章节。
-- 扫描目录存在 `INDEX.md` 时：TC 计数与链接文件是否一致、链接文件是否存在。
+- 扫描目录存在 `INDEX.md` 时：TC 计数与链接文件是否一致、链接文件是否存在、
+  模块小计与底部总计是否与明细之和一致，以及汇总表模块行与各模块小计是否一一对应且一致。
 
 > 说明：lint 为**保守校验**，只覆盖最易出错的规则，不等同于完整规则集；
-> 跨文件编号连续性、`style-rules.md` 的全量禁用词未纳入自动校验。
-> `schemas/testcase-metadata.schema.json` 为结构定义，lint 目前内置校验，不直接调用该 schema。
+> `style-rules.md` 的全量禁用词未全部纳入自动校验。
+> 元信息校验由 `schemas/testcase-metadata.schema.json` 驱动，两者保持同源。
+> 编号重复 / 连续性仅统计「功能测试」章节用例表中的 `用例编号`，不把
+> `问题跟踪` 等处的引用计入。
+> 模板中的占位符（含 `[]` / `{}`）会被跳过格式校验，可在安装后直接对模板运行。
+
+示例：
+
+```bash
+node scripts/lint-functional-testcases.mjs examples
+```
+
+## 示例
+
+`examples/` 提供一份完整样例，可作为 agent 输出风格的参照：
+
+```text
+examples/
+├── INDEX.md
+└── 01-AUTH-认证与会话管理/
+    └── FEAT-AUTH-001-用户登录.md
+```
 
 ## 与 playwright-ui-mapper 组合
 
@@ -89,4 +125,4 @@ playwright-ui-mapper        functional-testcase-writer        playwright-ui-mapp
 
 ## License
 
-MIT
+MIT，详见 [`LICENSE`](LICENSE)。

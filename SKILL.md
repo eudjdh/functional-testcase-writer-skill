@@ -47,7 +47,8 @@ metadata:
 6. 保留 `二、安全测试`、`三、性能测试` 的空表头。
 7. 写入 `测试记录` 与 `问题跟踪` 空表。
 8. 若存在 `INDEX.md`，按 `references/index-maintenance.md` 更新计数与链接。
-9. 输出完成摘要：文件路径、TC 数量、待确认项、是否更新 INDEX。
+9. 若可访问本 skill 的脚本路径，运行 `node <skill目录>/scripts/lint-functional-testcases.mjs <输出目录>` 自检，修复全部 error 后再交付。
+10. 输出完成摘要：文件路径、TC 数量、待确认项、是否更新 INDEX、lint 结果。
 
 ## 功能用例规则
 
@@ -94,3 +95,5 @@ metadata:
 - `references/index-maintenance.md`
 - `references/ui-mapper-handoff.md`
 - `templates/functional-testcase-template.md`
+- `examples/`（完整示例：功能用例文件 + INDEX）
+- `scripts/lint-functional-testcases.mjs`（产出后自检）

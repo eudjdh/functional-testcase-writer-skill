@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // 保守校验：覆盖最易出错的规则，不等同于完整规则集。
-// 已覆盖：接口测试章节、元信息必填、功能用例必填字段、待执行/实际结果矛盾、
-//         禁用词、编号重复、安全/性能误编号、测试记录/问题跟踪存在性、
-//         INDEX.md 计数与链接一致性。
-// 未覆盖：跨文件编号连续性、style-rules 的全量禁用词。
+// 已覆盖：接口测试章节、元信息必填与格式（schema 驱动）、功能用例必填字段与 TC 编号格式、
+//         待执行/实际结果矛盾、禁用词、编号重复与跨文件连续性、安全/性能误编号、
+//         测试记录/问题跟踪存在性、INDEX.md 计数/链接/小计/总计及跨表一致性。
+// 未覆盖：style-rules 的全量禁用词（仅覆盖内置高频禁用词）。
 import { readFile, readdir, stat } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -30,7 +31,7 @@ const SECTION = {
 
 const CASE_TYPES = new Set(["正常流程", "异常处理", "边界情况"]);
 const PRIORITIES = new Set(["P0", "P1", "P2", "P3"]);
-const REQUIRED_METADATA = [
+const FALLBACK_REQUIRED_METADATA = [
   "功能点编号",
   "功能点名称",
   "所属模块",
@@ -39,6 +40,8 @@ const REQUIRED_METADATA = [
   "文档版本号",
   "测试环境说明",
 ];
+const FALLBACK_FEAT_PATTERN = "^FEAT-[A-Z][A-Z0-9]*-[0-9]{3,}$";
+const FALLBACK_VERSION_PATTERN = "^V[0-9]+(\\.[0-9]+)*$";
 const REQUIRED_FIELDS = [
   "用例编号",
   "用例名称",
@@ -65,8 +68,26 @@ const FORBIDDEN_WORDS = [
   "请求参数",
   "响应体",
 ];
-const TC_PATTERN = /\bTC-[A-Z][A-Z0-9]*-[0-9]{3,}\b/g;
-const FEAT_PATTERN = /^FEAT-[A-Z][A-Z0-9]*-[0-9]{3,}$/;
+
+// schema 作为元信息校验的单一事实来源；缺失时回退到内置默认值。
+const SCHEMA = loadMetadataSchema();
+const REQUIRED_METADATA = SCHEMA?.required ?? FALLBACK_REQUIRED_METADATA;
+const FEAT_PATTERN = new RegExp(
+  SCHEMA?.properties?.["功能点编号"]?.pattern ?? FALLBACK_FEAT_PATTERN,
+);
+const VERSION_PATTERN = new RegExp(
+  SCHEMA?.properties?.["文档版本号"]?.pattern ?? FALLBACK_VERSION_PATTERN,
+);
+const TC_ID_PATTERN = /^TC-[A-Z][A-Z0-9]*-[0-9]{3,}$/;
+
+function loadMetadataSchema() {
+  try {
+    const schemaUrl = new URL("../schemas/testcase-metadata.schema.json", import.meta.url);
+    return JSON.parse(readFileSync(schemaUrl, "utf8"));
+  } catch {
+    return null;
+  }
+}
 
 export function lintContent(text, fileLabel = "<memory>") {
   const issues = [];
@@ -74,11 +95,17 @@ export function lintContent(text, fileLabel = "<memory>") {
   const warn = (message) => issues.push({ level: "warn", message });
 
   const metadata = parseMetadata(text);
+  const isPlaceholder = (value) => /[[\]{}]/.test(value);
   for (const key of REQUIRED_METADATA) {
     if (!metadata[key]) error(`${fileLabel}: 头部元信息缺少必填字段「${key}」`);
   }
-  if (metadata["功能点编号"] && !FEAT_PATTERN.test(metadata["功能点编号"])) {
-    error(`${fileLabel}: 功能点编号格式不正确：${metadata["功能点编号"]}`);
+  const featId = metadata["功能点编号"];
+  if (featId && !isPlaceholder(featId) && !FEAT_PATTERN.test(featId)) {
+    error(`${fileLabel}: 功能点编号格式不正确：${featId}`);
+  }
+  const version = metadata["文档版本号"];
+  if (version && !isPlaceholder(version) && !VERSION_PATTERN.test(version)) {
+    error(`${fileLabel}: 文档版本号格式不正确：${version}（应形如 V1.0）`);
   }
 
   const sections = splitSections(text);
@@ -96,6 +123,7 @@ export function lintContent(text, fileLabel = "<memory>") {
     warn(`${fileLabel}: 「${SECTION.functional}」未发现功能用例表`);
   }
   const seenTc = new Set();
+  const functionalTcIds = [];
   for (const fields of functionalCases) {
     const id = fields["用例编号"] ?? "";
     if (!/^TC-/.test(id)) {
@@ -104,6 +132,10 @@ export function lintContent(text, fileLabel = "<memory>") {
       }
       continue;
     }
+    if (!TC_ID_PATTERN.test(id)) {
+      error(`${fileLabel}: 用例编号格式不正确：${id}（应形如 TC-AUTH-001）`);
+    }
+    functionalTcIds.push(id);
     for (const field of REQUIRED_FIELDS) {
       if (!fields[field] || !fields[field].trim()) {
         error(`${fileLabel}: ${id} 缺少必填字段「${field}」`);
@@ -152,7 +184,7 @@ export function lintContent(text, fileLabel = "<memory>") {
     if (!find(keyword)) warn(`${fileLabel}: 缺少章节「${keyword}」`);
   }
 
-  return { issues, tcIds: [...(text.match(TC_PATTERN) ?? [])] };
+  return { issues, tcIds: functionalTcIds };
 }
 
 async function checkIndex(indexPath) {
@@ -160,14 +192,16 @@ async function checkIndex(indexPath) {
   const label = basename(indexPath);
   const base = dirname(indexPath);
   const text = await readFile(indexPath, "utf8");
-  for (const line of text.split("\n")) {
+  const lines = text.split("\n");
+
+  for (const line of lines) {
     if (!/^\s*\|.*\|\s*$/.test(line)) continue;
     const cells = splitRow(line);
     if (cells.length < 6) continue;
     if (cells[0] === "#" || cells[0] === "模块") continue;
     if (cells.every((cell) => /^:?-{3,}:?$/.test(cell))) continue;
     if (cells.some((cell) => /小计|总计|合计|汇总/.test(cell))) continue;
-    const tc = Number.parseInt(cells[2], 10);
+    const tc = toNumber(cells[2]);
     if (!Number.isInteger(tc)) continue;
     const linkCell = cells.find((cell) => cell.includes("]("));
     if (!linkCell) {
@@ -181,7 +215,7 @@ async function checkIndex(indexPath) {
       continue;
     }
     const fileText = await readFile(target, "utf8");
-    const actual = new Set(fileText.match(TC_PATTERN) ?? []).size;
+    const actual = new Set(functionalCaseIds(fileText)).size;
     if (actual !== tc) {
       issues.push({
         level: "error",
@@ -189,7 +223,103 @@ async function checkIndex(indexPath) {
       });
     }
   }
+
+  const tables = indexTables(lines);
+  const moduleSubtotals = new Map();
+  for (const { heading, header, rows } of tables) {
+    const tcIndex = header.indexOf("TC");
+    if (tcIndex < 0) continue;
+    const dataRows = rows.filter((cells) => !cells.some((cell) => /小计|总计|合计|汇总/.test(cell)));
+    const detailSum = dataRows.reduce((sum, cells) => sum + (toNumber(cells[tcIndex]) || 0), 0);
+    for (const [pattern, kind] of [
+      [/小计/, "小计"],
+      [/总计|合计|汇总/, "总计"],
+    ]) {
+      const declaredRow = rows.find((cells) => cells.some((cell) => pattern.test(cell)));
+      if (!declaredRow) continue;
+      const declared = toNumber(declaredRow[tcIndex]);
+      if (Number.isInteger(declared) && declared !== detailSum) {
+        issues.push({
+          level: "error",
+          message: `${label}: ${kind} ${declared} 与明细之和 ${detailSum} 不一致`,
+        });
+      }
+    }
+    if (heading && header.includes("功能点")) {
+      const subtotalRow = rows.find((cells) => cells.some((cell) => /小计/.test(cell)));
+      if (subtotalRow) moduleSubtotals.set(heading, toNumber(subtotalRow[tcIndex]));
+    }
+  }
+
+  const summaryModules = new Map();
+  for (const { header, rows } of tables) {
+    if (!header.includes("模块")) continue;
+    const tcIndex = header.indexOf("TC");
+    if (tcIndex < 0) continue;
+    for (const cells of rows) {
+      if (cells.some((cell) => /小计|总计|合计|汇总/.test(cell))) continue;
+      const moduleName = cells[0];
+      const declared = toNumber(cells[tcIndex]);
+      if (!Number.isInteger(declared)) continue;
+      summaryModules.set(moduleName, declared);
+      if (!moduleSubtotals.has(moduleName)) {
+        issues.push({
+          level: "error",
+          message: `${label}: 汇总表「${moduleName}」缺少对应模块小计`,
+        });
+        continue;
+      }
+      const subtotal = moduleSubtotals.get(moduleName);
+      if (Number.isInteger(subtotal) && declared !== subtotal) {
+        issues.push({
+          level: "error",
+          message: `${label}: 汇总表「${moduleName}」TC ${declared} 与模块小计 ${subtotal} 不一致`,
+        });
+      }
+    }
+  }
+  for (const [moduleName, subtotal] of moduleSubtotals) {
+    if (summaryModules.has(moduleName)) continue;
+    issues.push({
+      level: "error",
+      message: `${label}: 模块「${moduleName}」小计 ${subtotal} 未出现在汇总表`,
+    });
+  }
+
   return issues;
+}
+
+function checkContinuity(globalTc) {
+  const issues = [];
+  const byPrefix = new Map();
+  for (const id of globalTc.keys()) {
+    const match = id.match(/^TC-([A-Z][A-Z0-9]*)-([0-9]{3,})$/);
+    if (!match) continue;
+    if (!byPrefix.has(match[1])) byPrefix.set(match[1], new Set());
+    byPrefix.get(match[1]).add(Number.parseInt(match[2], 10));
+  }
+  for (const [prefix, numbers] of byPrefix) {
+    const sorted = [...numbers].sort((a, b) => a - b);
+    if (sorted.length && sorted[0] !== 1) {
+      issues.push({
+        level: "warn",
+        message: `TC-${prefix}-*: 未从 001 起始，最小编号为 ${pad3(sorted[0])}`,
+      });
+    }
+    for (let i = 1; i < sorted.length; i += 1) {
+      if (sorted[i] !== sorted[i - 1] + 1) {
+        issues.push({
+          level: "warn",
+          message: `TC-${prefix}-*: 编号不连续，${pad3(sorted[i - 1])} 与 ${pad3(sorted[i])} 之间存在缺号`,
+        });
+      }
+    }
+  }
+  return issues;
+}
+
+function pad3(value) {
+  return String(value).padStart(3, "0");
 }
 
 function parseMetadata(text) {
@@ -251,6 +381,18 @@ function caseTables(sectionText) {
   return tables;
 }
 
+function functionalCaseIds(text) {
+  const sections = splitSections(text);
+  const functional =
+    [...sections.entries()].find(([title]) => title.includes(SECTION.functional))?.[1] ?? "";
+  const ids = [];
+  for (const fields of caseTables(functional)) {
+    const id = (fields["用例编号"] ?? "").trim();
+    if (/^TC-/.test(id)) ids.push(id);
+  }
+  return ids;
+}
+
 function splitRow(row) {
   return row
     .trim()
@@ -258,6 +400,50 @@ function splitRow(row) {
     .replace(/\|$/, "")
     .split("|")
     .map((cell) => cell.trim());
+}
+
+function toNumber(cell) {
+  const cleaned = String(cell ?? "").replace(/[*,\s]/g, "");
+  const value = Number.parseInt(cleaned, 10);
+  return Number.isInteger(value) ? value : NaN;
+}
+
+function isSeparatorRow(cells) {
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function indexTables(lines) {
+  const tables = [];
+  let heading = null;
+  let group = [];
+  const flush = () => {
+    if (!group.length) return;
+    const cells = group.map(splitRow);
+    const header = cells.find((row) => !isSeparatorRow(row)) ?? null;
+    if (header) {
+      tables.push({
+        heading,
+        header,
+        rows: cells.filter((row) => row !== header && !isSeparatorRow(row)),
+      });
+    }
+    group = [];
+  };
+  for (const line of lines) {
+    const match = line.match(/^##\s+(.+?)\s*$/);
+    if (match) {
+      flush();
+      heading = match[1];
+      continue;
+    }
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      group.push(line);
+    } else {
+      flush();
+    }
+  }
+  flush();
+  return tables;
 }
 
 async function exists(path) {
@@ -296,7 +482,7 @@ async function main() {
   if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
     console.log("Usage: node scripts/lint-functional-testcases.mjs <path...>");
     console.log("  <path> 可以是功能测试用例仓库目录或单个 .md 文件");
-    console.log("  扫描目录时若存在 INDEX.md，会校验其 TC 计数与链接文件的一致性");
+    console.log("  扫描目录时若存在 INDEX.md，会校验其 TC 计数、链接、小计与总计");
     process.exitCode = args.length === 0 ? 1 : 0;
     return;
   }
@@ -318,9 +504,9 @@ async function main() {
   for (const file of files.sort()) {
     const text = await readFile(file, "utf8");
     const label = basename(file);
-    const { issues } = lintContent(text, label);
+    const { issues, tcIds } = lintContent(text, label);
     const reported = new Set();
-    for (const id of new Set(text.match(TC_PATTERN) ?? [])) {
+    for (const id of new Set(tcIds)) {
       if (globalTc.has(id) && !reported.has(id)) {
         reported.add(id);
         issues.push({ level: "error", message: `${label}: 用例编号跨文件重复：${id}（另见 ${globalTc.get(id)}）` });
@@ -338,6 +524,9 @@ async function main() {
       if (issues.length) results.push({ label: indexPath, issues });
     }
   }
+
+  const continuity = checkContinuity(globalTc);
+  if (continuity.length) results.push({ label: "编号连续性", issues: continuity });
 
   let errorCount = 0;
   let warnCount = 0;
